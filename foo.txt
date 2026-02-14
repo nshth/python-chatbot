@@ -1,0 +1,8 @@
+a = 5
+
+def change(x):
+    x = x + 2
+    return x
+
+change(a)
+print(a)
