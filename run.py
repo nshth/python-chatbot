@@ -1,6 +1,8 @@
 import os
 import sys
 import filetype
+import pytesseract
+from pdf2image import convert_from_path
 from pypdf import PdfReader
 from groq import Groq
 import base64
@@ -9,6 +11,8 @@ from dotenv import load_dotenv
 load_dotenv("./.env")
 openrouter_secret = os.getenv("API")
 # grok_secret = os.getenv("GROK_API")
+pytesseract.pytesseract.tesseract_cmd = r"C:/Program Files/Tesseract-OCR/tesseract.exe"
+
 
 message_history: list[dict[str, str]] = []
 
@@ -22,7 +26,12 @@ def preprocessor_pdf(file_path) -> str:
     content = ""
 
     for page in reader.pages:
-        content += page.extract_text() + "\n"
+        content += page.extract_text() or "" + "\n"
+
+    if not content.strip():
+        pages = convert_from_path(file_path, poppler_path=r"C:/poppler/Library/bin")
+        for page in pages:
+            content += pytesseract.image_to_string(page) + "\n"
 
     return content
 
