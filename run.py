@@ -2,8 +2,8 @@ import os
 import sys
 from pathlib import Path
 from pypdf import PdfReader
-import httpx
 from groq import Groq
+import base64
 from dotenv import load_dotenv
 
 load_dotenv("./.env")
@@ -26,66 +26,111 @@ def preprocessor_pdf(file_path) -> str:
 
     return content
 
-def files_handler(file_paths: list[str]) -> dict[str, str]:
-    file_contents: dict[str, str] = {}
+def preprocessor_image(image_path):
+  with open(image_path, "rb") as f:
+    encoded = base64.b64encode(f.read()).decode('utf-8')
+    return encoded
+
+def files_handler(file_paths: list[str]) -> list[dict]:
+    processed_files = []
 
     for file_path in file_paths:
-        # Ensure the path refers to an existing file
-        if not os.path.isfile(path=file_path):
+        if not os.path.isfile(file_path):
             print(f"\nWARN: File {file_path} does not exist!\n")
             continue
 
-        file_type = Path(file_path).suffix
+        file_type = Path(file_path).suffix.lower()
 
         if file_type == ".txt":
-            file_content = preprocessor_txt(file_path)
+            content = preprocessor_txt(file_path)
+            processed_files.append({
+                "path": file_path,
+                "type": "text",
+                "content": content
+            })
+
         elif file_type == ".pdf":
-            file_content = preprocessor_pdf(file_path)
+            content = preprocessor_pdf(file_path)
+            processed_files.append({
+                "path": file_path,
+                "type": "text",
+                "content": content
+            })
+
+        elif file_type in [".jpg", ".jpeg", ".png"]:
+            content = preprocessor_image(file_path)
+            processed_files.append({
+                "path": file_path,
+                "type": "image",
+                "content": content,
+                "format": file_type.replace(".", "")
+            })
+
         else:
-            print(f"\nWARN: File type {file_type} not supported!\n")
-            continue
+            print(f"\nWARN: Unsupported file type {file_type}\n")
 
-        if not file_content:
-            print(f"\nWARN: File {file_path} is empty!\n")
-            continue
+    return processed_files
 
-        file_contents[file_path] = file_content
 
-    return file_contents
+# def file_content_prompt_generator(file_contents: dict[str, str]) -> str:
+#     prompt_starter = "The user has uploaded some files. Here are the contents..."
 
-def file_content_prompt_generator(file_contents: dict[str, str]) -> str:
-    prompt_starter = "The user has uploaded some files. Here are the contents..."
-
-    for key, val in file_contents.items():
-        prompt_starter += f"\n\nFile: {key}\n```\n{val}\n```\n Query:"
-    return prompt_starter
+#     for key, val in file_contents.items():
+#         prompt_starter += f"\n\nFile: {key}\n```\n{val}\n```\n Query:"
+#     return prompt_starter
 
 
 def exit_app(user_message: str) -> None:
     if user_message == "q":
         sys.exit()
 
+def build_user_message(user_prompt: str, files: list[dict]) -> list[dict]:
+    content = []
 
-def openrouter_client(user_prompt: str) -> str:
-    api_url = "https://openrouter.ai/api/v1/chat/completions"
-    llm_model = "openai/gpt-5.2"
-    message_data = {"model": llm_model, "messages": message_history}
+    # Add file contents
+    for file in files:
+        if file["type"] == "text":
+            content.append({
+                "type": "text",
+                "text": f"Uploaded document content:\n{file['path']} \n\n{file['content']}"
+            })
+
+        elif file["type"] == "image":
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/{file['format']};base64,{file['content']}"
+                }
+            })
+
+    # Add user's query
+    content.append({
+        "type": "text",
+        "text": f"User query: {user_prompt}"
+    })
+
+    return content
+
+# def openrouter_client(message_history) -> str:
+#     api_url = "https://openrouter.ai/api/v1/chat/completions"
+#     llm_model = "openai/gpt-5.2"
+#     message_data = {"model": llm_model, "messages": message_history}
     
-    response = httpx.post(
-        url=api_url,
-        headers={"Authorization": f"Bearer {openrouter_secret}"},
-        json=message_data  
-    )
+#     response = httpx.post(
+#         url=api_url,
+#         headers={"Authorization": f"Bearer {openrouter_secret}"},
+#         json=message_data  
+#     )
 
-    # Check status code BEFORE parsing JSON
-    if response.status_code >= 400:
-        print(f"\nApp ran into an error. Status code {response.status_code}")
-        sys.exit(1)
+#     # Check status code BEFORE parsing JSON
+#     if response.status_code >= 400:
+#         print(f"\nApp ran into an error. Status code {response.status_code}")
+#         sys.exit(1)
 
-    response_data = response.json()
-    decoded_response = response_data["choices"][0]["message"]["content"]
+#     response_data = response.json()
+#     decoded_response = response_data["choices"][0]["message"]["content"]
 
-    return decoded_response
+#     return decoded_response
 
 
 def groq_client(message_history):
@@ -94,7 +139,7 @@ def groq_client(message_history):
 
     chat_completion = client.chat.completions.create(
         messages=message_history,
-        model="llama-3.3-70b-versatile",
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
     )
 
     decoded_response = chat_completion.choices[0].message.content
@@ -120,12 +165,13 @@ def main() -> None:
                 break
 
         file_contents = files_handler(file_upload_paths)
+        content = build_user_message(prompt, file_contents)
 
-        if len(file_contents) > 0:
-            file_prompt_prefix = file_content_prompt_generator(file_contents)
-            prompt = file_prompt_prefix + prompt + '\n```\n'
+        # if len(content) > 0:
+        #     file_prompt_prefix = file_content_prompt_generator(content)
+        #     prompt = file_prompt_prefix + prompt + '\n```\n'
         
-        message_history.append({"role": "user", "content": prompt})
+        message_history.append({"role": "user", "content": content})
 
         llm_response = groq_client(message_history)
 
