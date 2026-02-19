@@ -1,6 +1,6 @@
 import os
 import sys
-from pathlib import Path
+import filetype
 from pypdf import PdfReader
 from groq import Groq
 import base64
@@ -39,17 +39,25 @@ def files_handler(file_paths: list[str]) -> list[dict]:
             print(f"\nWARN: File {file_path} does not exist!\n")
             continue
 
-        file_type = Path(file_path).suffix.lower()
+        kind = filetype.guess(file_path)
 
-        if file_type == ".txt":
-            content = preprocessor_txt(file_path)
-            processed_files.append({
-                "path": file_path,
-                "type": "text",
-                "content": content
-            })
 
-        elif file_type == ".pdf":
+        if kind is None: 
+            try:
+                content = preprocessor_txt(file_path)
+                processed_files.append({
+                    "path": file_path,
+                    "type": "text",
+                    "content": content
+                })
+            except UnicodeDecodeError:
+                print(f"\nWARN: Could not determine file type for {file_path}\n")
+            continue
+
+
+        mime = kind.mime
+
+        if mime == "application/pdf":
             content = preprocessor_pdf(file_path)
             processed_files.append({
                 "path": file_path,
@@ -57,17 +65,18 @@ def files_handler(file_paths: list[str]) -> list[dict]:
                 "content": content
             })
 
-        elif file_type in [".jpg", ".jpeg", ".png"]:
+        elif mime in ["image/jpeg", "image/png"]:
             content = preprocessor_image(file_path)
+            ext = kind.extension
             processed_files.append({
                 "path": file_path,
                 "type": "image",
                 "content": content,
-                "format": file_type.replace(".", "")
+                "format": ext
             })
 
         else:
-            print(f"\nWARN: Unsupported file type {file_type}\n")
+            print(f"\nWARN: Unsupported file type {type}\n")
 
     return processed_files
 
