@@ -6,13 +6,16 @@ from pdf2image import convert_from_path
 from pypdf import PdfReader
 from groq import Groq
 import base64
+import re
+from sentence_transformers import SentenceTransformer
+import chromadb
 from dotenv import load_dotenv
 
 load_dotenv("./.env")
-openrouter_secret = os.getenv("API")
-# grok_secret = os.getenv("GROK_API")
 pytesseract.pytesseract.tesseract_cmd = r"C:/Program Files/Tesseract-OCR/tesseract.exe"
-
+client = chromadb.PersistentClient(path="./chroma_db")
+# client = chromadb.Client()
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 message_history: list[dict[str, str]] = []
 
@@ -20,6 +23,7 @@ def preprocessor_txt(file_path: str) -> str:
     with open(file=file_path, mode="r") as f:
         content = f.read()
     return content
+
 
 def preprocessor_pdf(file_path) -> str:
     reader = PdfReader(file_path)
@@ -35,13 +39,61 @@ def preprocessor_pdf(file_path) -> str:
 
     return content
 
-def preprocessor_image(image_path):
+def chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> str:
+    chunks = []
+
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+
+    step = chunk_size - chunk_overlap
+
+    for i in range(0, len(sentences), step):
+        window = sentences[i:i + chunk_size]  
+        chunk = " ".join(window)
+        chunks.append(chunk)
+
+    return chunks
+
+def embed(chuncks: str):
+    vector = model.encode(chuncks).tolist()
+    return vector
+
+def is_already_stored(file_path: str) -> bool:
+    collection = client.get_or_create_collection("documents")
+    results = collection.get(ids=[file_path + "0"])  
+    return bool(results["ids"])
+
+def store_chunks(chunks: list[str], processed_content) -> None:
+    if is_already_stored(processed_content['path']):
+        print("skipping...")
+        return
+    collection = client.get_or_create_collection("documents")
+    for i, chunk in enumerate(chunks):
+        embedding = embed(chunk)
+        collection.add(
+            documents=[chunk],
+            embeddings=embedding,
+            ids=processed_content['path'] + str(i)
+        )
+    return collection
+
+def retrieve(query: str, n_results: int = 2) -> list[str]:
+    collection = client.get_or_create_collection("documents")
+    query_embedding = embed(query)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results
+    )
+    return results["documents"][0]
+
+def preprocessor_image(image_path) -> str | None:
   with open(image_path, "rb") as f:
     encoded = base64.b64encode(f.read()).decode('utf-8')
     return encoded
 
 def files_handler(file_paths: list[str]) -> list[dict]:
     processed_files = []
+    # mime_type_list = ["image/jpeg", "image/png"]
+    # robot.txt
 
     for file_path in file_paths:
         if not os.path.isfile(file_path):
@@ -49,7 +101,6 @@ def files_handler(file_paths: list[str]) -> list[dict]:
             continue
 
         kind = filetype.guess(file_path)
-
 
         if kind is None: 
             try:
@@ -89,38 +140,17 @@ def files_handler(file_paths: list[str]) -> list[dict]:
 
     return processed_files
 
-
-# def file_content_prompt_generator(file_contents: dict[str, str]) -> str:
-#     prompt_starter = "The user has uploaded some files. Here are the contents..."
-
-#     for key, val in file_contents.items():
-#         prompt_starter += f"\n\nFile: {key}\n```\n{val}\n```\n Query:"
-#     return prompt_starter
-
-
 def exit_app(user_message: str) -> None:
     if user_message == "q":
         sys.exit()
 
-def build_user_message(user_prompt: str, files: list[dict]) -> list[dict]:
+def build_user_message(user_prompt: str, retrieved_chunks: list[dict]) -> list[dict]:
     content = []
 
-    # Add file contents
-    for file in files:
-        if file["type"] == "text":
-            content.append({
-                "type": "text",
-                "text": f"Uploaded document content:\n{file['path']} \n\n{file['content']}"
-            })
-
-        elif file["type"] == "image":
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{file['format']};base64,{file['content']}"
-                }
-            })
-
+    content.append({
+        "type": "text",
+        "text": f"Uploaded document content:\n{retrieved_chunks}"
+    })
     # Add user's query
     content.append({
         "type": "text",
@@ -128,28 +158,6 @@ def build_user_message(user_prompt: str, files: list[dict]) -> list[dict]:
     })
 
     return content
-
-# def openrouter_client(message_history) -> str:
-#     api_url = "https://openrouter.ai/api/v1/chat/completions"
-#     llm_model = "openai/gpt-5.2"
-#     message_data = {"model": llm_model, "messages": message_history}
-    
-#     response = httpx.post(
-#         url=api_url,
-#         headers={"Authorization": f"Bearer {openrouter_secret}"},
-#         json=message_data  
-#     )
-
-#     # Check status code BEFORE parsing JSON
-#     if response.status_code >= 400:
-#         print(f"\nApp ran into an error. Status code {response.status_code}")
-#         sys.exit(1)
-
-#     response_data = response.json()
-#     decoded_response = response_data["choices"][0]["message"]["content"]
-
-#     return decoded_response
-
 
 def groq_client(message_history):
     client = Groq(
@@ -183,12 +191,21 @@ def main() -> None:
                 break
 
         file_contents = files_handler(file_upload_paths)
-        content = build_user_message(prompt, file_contents)
+        retrieved_chunks = []
+        if file_contents:
+            for file_content in file_contents:
+                chunks = chunk_text(file_content['content'], 2, 1)
+                store_chunks(chunks, file_content)
+            
+        try:
+            retrieved_chunks = retrieve(prompt)
+        except Exception as e:
+            retrieved_chunks = []
+            print("No documents in database yet") 
 
-        # if len(content) > 0:
-        #     file_prompt_prefix = file_content_prompt_generator(content)
-        #     prompt = file_prompt_prefix + prompt + '\n```\n'
-        
+        print("RETRIEVED CHUNKS:", retrieved_chunks)
+        content = build_user_message(prompt, retrieved_chunks)
+
         message_history.append({"role": "user", "content": content})
 
         llm_response = groq_client(message_history)
@@ -200,3 +217,11 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# handle image differently
+# metadat filteirng?
+# score threshold?
+# Reranking? model to rerank them by relevance
+# Hybrid search? vector search with keyword matching
+# Evaluation?
