@@ -9,6 +9,9 @@ import base64
 import re
 from sentence_transformers import SentenceTransformer
 import chromadb
+import streamlit as st
+from io import StringIO
+import io
 from dotenv import load_dotenv
 
 load_dotenv("./.env")
@@ -72,7 +75,7 @@ def store_chunks(chunks: list[str], processed_content) -> None:
         collection.add(
             documents=[chunk],
             embeddings=embedding,
-            ids=processed_content['path'] + str(i)
+            ids=processed_content['path'] + str(i) 
         )
     return collection
 
@@ -90,53 +93,53 @@ def preprocessor_image(image_path) -> str | None:
     encoded = base64.b64encode(f.read()).decode('utf-8')
     return encoded
 
-def files_handler(file_paths: list[str]) -> list[dict]:
+def files_handler(uploaded_files: list) -> list[dict]:
     processed_files = []
-    # mime_type_list = ["image/jpeg", "image/png"]
-    # robot.txt
 
-    for file_path in file_paths:
-        if not os.path.isfile(file_path):
-            print(f"\nWARN: File {file_path} does not exist!\n")
-            continue
+    for uploaded_file in uploaded_files:
+        file_bytes = uploaded_file.getbuffer()
+        file_name = uploaded_file.name
+        
+        # Detect file type from bytes
+        kind = filetype.guess(io.BytesIO(file_bytes))
 
-        kind = filetype.guess(file_path)
-
-        if kind is None: 
+        if kind is None:
             try:
-                content = preprocessor_txt(file_path)
+                content = bytes(file_bytes).decode('utf-8')
                 processed_files.append({
-                    "path": file_path,
+                    "path": file_name,  # Just the name, not a real path
                     "type": "text",
                     "content": content
                 })
             except UnicodeDecodeError:
-                print(f"\nWARN: Could not determine file type for {file_path}\n")
+                st.warning(f"Could not decode {file_name}")
             continue
-
 
         mime = kind.mime
 
         if mime == "application/pdf":
-            content = preprocessor_pdf(file_path)
+            reader = PdfReader(io.BytesIO(file_bytes))
+            content = ""
+            for page in reader.pages:
+                content += page.extract_text() or "" + "\n"
             processed_files.append({
-                "path": file_path,
+                "path": file_name,
                 "type": "text",
                 "content": content
             })
 
         elif mime in ["image/jpeg", "image/png"]:
-            content = preprocessor_image(file_path)
+            encoded = base64.b64encode(file_bytes).decode('utf-8')
             ext = kind.extension
             processed_files.append({
-                "path": file_path,
+                "path": file_name,
                 "type": "image",
-                "content": content,
+                "content": encoded,
                 "format": ext
             })
 
         else:
-            print(f"\nWARN: Unsupported file type {type}\n")
+            st.warning(f"Unsupported file type: {mime}")
 
     return processed_files
 
@@ -171,57 +174,10 @@ def groq_client(message_history):
     decoded_response = chat_completion.choices[0].message.content
     return decoded_response
 
-def main() -> None:
-    print("Welcome to ChatBot!\n\n\n")
-    while True:
-        prompt = input("Prompt: ")
-        exit_app(prompt)
-
-        file_upload_paths: list[str] = []  # Create fresh list each iteration
-
-        file = input("Do you want to upload files? (y or n) ")
-        while True:
-            if file == 'y':
-                _file_path = input("File location: ")
-                if _file_path == "":
-                    break
-                else:
-                    file_upload_paths.append(_file_path)
-            else:
-                break
-
-        file_contents = files_handler(file_upload_paths)
-        retrieved_chunks = []
-        if file_contents:
-            for file_content in file_contents:
-                chunks = chunk_text(file_content['content'], 2, 1)
-                store_chunks(chunks, file_content)
-            
-        try:
-            retrieved_chunks = retrieve(prompt)
-        except Exception as e:
-            retrieved_chunks = []
-            print("No documents in database yet") 
-
-        print("RETRIEVED CHUNKS:", retrieved_chunks)
-        content = build_user_message(prompt, retrieved_chunks)
-
-        message_history.append({"role": "user", "content": content})
-
-        llm_response = groq_client(message_history)
-
-        message_history.append({"role": "assistant", "content": llm_response})
-
-        print("AI:", llm_response)
-
-
-if __name__ == "__main__":
-    main()
-
 
 # handle image differently
 # metadat filteirng?
 # score threshold?
-# Reranking? model to rerank them by relevance
+# Reranking? model to rerank them by relevance or retreived output
 # Hybrid search? vector search with keyword matching
 # Evaluation?
