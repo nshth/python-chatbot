@@ -95,12 +95,15 @@ def preprocessor_image(image_path) -> str | None:
 
 def files_handler(uploaded_files: list) -> list[dict]:
     processed_files = []
-
     for uploaded_file in uploaded_files:
-        file_bytes = uploaded_file.getbuffer()
+
         file_name = uploaded_file.name
-        
-        # Detect file type from bytes
+        try:
+            with open(uploaded_file.path, 'rb') as f:
+                file_bytes = f.read()
+        except Exception as e:
+            print(f"Error reading file {file_name}: {e}")
+
         kind = filetype.guess(io.BytesIO(file_bytes))
 
         if kind is None:
@@ -169,10 +172,11 @@ def groq_client(message_history):
     chat_completion = client.chat.completions.create(
         messages=message_history,
         model="meta-llama/llama-4-scout-17b-16e-instruct",
+        stream=True
     )
 
-    decoded_response = chat_completion.choices[0].message.content
-    return decoded_response
+    # decoded_response = chat_completion.choices[0].message.content
+    return chat_completion
 
 
 # handle image differently

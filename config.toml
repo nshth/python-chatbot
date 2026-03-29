@@ -1,0 +1,16 @@
+[persistence]
+enabled = true
+
+[features.spontaneous_file_upload]
+enabled = true
+accept = ["*/*"] 
+max_files = 5
+max_size_mb = 500
+
+[UI]
+name = "Assistant"
+cot = "full"
+
+[features]
+user_message_autoscroll = true
+edit_message = true
