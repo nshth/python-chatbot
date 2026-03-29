@@ -26,7 +26,7 @@ if prompt := st.chat_input("Enter your prompt"):
     retrieved_chunks = []
     try:
         retrieved_chunks = retrieve(prompt)
-    except Exception as e:
+    except Exception:
         st.warning("No documents in database yet")
     
     content = build_user_message(prompt, retrieved_chunks)
