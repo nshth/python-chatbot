@@ -1,0 +1,9 @@
+message_history -> cl.user_session.set("message_history",...) in chainlit or
+filehandler func -> content load
+        chunks -> split -> RecursiveCharacterTextSplitter -> split_documents
+        embed -> HuggingFaceEmbeddings -> langchain.vectorstores -> Chroma -> create_vectorstore()
+        vector_store -> vector_store.add_documents(chunks)
+
+prompt_generator -> ChatPromptTemplate
+retrieve -> vector_store.as_retriever(search_kwargs={"k": 3})
+build_user_message, groq_client -> create_retrieval_chain
